@@ -1,0 +1,12 @@
+# Core dependencies
+openai>=1.30.0
+litellm>=1.40.0          # unified LLM gateway (wraps OpenAI; also used by tau-bench)
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# tau-bench is installed separately as a git submodule:
+#   git submodule add https://github.com/sierra-research/tau-bench external/tau-bench
+#   pip install -e external/tau-bench
+
+# Optional: for metrics CSV output
+# (stdlib csv module is used, no extra dep needed)

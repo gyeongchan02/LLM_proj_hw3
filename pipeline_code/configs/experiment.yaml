@@ -1,0 +1,64 @@
+# Experiment configuration
+# Passed to src/harness/runner.py
+
+# ── Environment ─────────────────────────────────────────────────────────────
+env_name: retail          # "retail" (primary) or "airline" (stretch)
+task_split: test
+start_index: 0
+end_index: 10             # set to null for full test split (~115 tasks)
+seeds: [42]               # add more seeds (e.g. [42, 7, 123]) for pass^k
+
+# ── Main agent (used by ALL methods except where overridden) ─────────────────
+model: gpt-5.4-nano          # 범용 task 처리 (cheaper, faster)
+model_provider: openai
+
+# ── Critic (used by Ours) ────────────────────────────────────────────────────
+critic_model: gpt-5.4-mini   # mutating action 판정 (stronger, fewer calls)
+
+# ── Oracle label file (P2 provides) ─────────────────────────────────────────
+oracle_label_file: data/labels/perturbations.jsonl
+
+# ── User simulator (tau-bench) ───────────────────────────────────────────────
+user:
+  strategy: react          # tau-bench user strategy ("react" or "llm")
+  model: gpt-5.4-nano
+  provider: openai
+
+# ── Output ──────────────────────────────────────────────────────────────────
+output_dir: data/results
+
+# ── Methods to run ───────────────────────────────────────────────────────────
+# Each entry maps to get_agent(name, ...) in src/agents/__init__.py
+methods:
+  - name: vanilla
+
+  - name: ours
+    critic_model: gpt-5.4-mini
+    enable_rollback: false
+
+  - name: saber
+
+  - name: reflexion
+    max_reflections: 3
+
+  - name: oracle
+    label_file: data/labels/perturbations.jsonl
+
+# ── Ablation runs (uncomment to run) ─────────────────────────────────────────
+# Each entry here runs "ours" with one condition stripped out (P3 ablations):
+#
+#  - name: ours
+#    critic_model: gpt-5.4-mini
+#    condition_ablation: ["POLICY"]
+#
+#  - name: ours
+#    critic_model: gpt-5.4-mini
+#    condition_ablation: ["STATE"]
+#
+#  - name: ours
+#    critic_model: gpt-5.4-mini
+#    condition_ablation: ["GOAL"]
+#
+#  - name: ours
+#    critic_model: gpt-5.4-mini
+#    condition_ablation: ["CONSTRAINT"]

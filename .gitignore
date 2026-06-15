@@ -1,3 +1,19 @@
 .DS_Store
 .claude/
 *.pdf
+
+# API keys
+.env
+pipeline_code/.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Experiment outputs (large; commit metrics.csv separately if needed)
+data/results/*.jsonl
+
+# tau-bench submodule (added via git submodule)
+external/
