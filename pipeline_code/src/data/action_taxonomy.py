@@ -16,30 +16,48 @@ from __future__ import annotations
 
 # ── Retail tools ────────────────────────────────────────────────────────────
 
+# Verified against tau-bench source: envs/retail/tools/ (16 tools total).
+# All names below match the actual tool function names exactly.
 RETAIL_READONLY: set[str] = {
     "get_user_details",
     "find_user_id_by_email",
     "find_user_id_by_name_zip",
     "get_order_details",
-    "find_order_id_by_invoice",
     "get_product_details",
     "list_all_product_types",
     "calculate",
     "think",
 }
 
-# Mutating tools that CAN be undone by a follow-up action within the same session.
+# Reversibility criterion (P2), grounded in tool source + ALL_TOOLS:
+# A mutating tool is REVERSIBLE iff its effect can be undone within the same
+# session. Operationally: the tool does NOT move the order status away from its
+# precondition, so it stays re-callable and can be re-invoked with the prior
+# value to restore state. If the tool changes status (so its precondition is
+# broken) AND no inverse tool exists in ALL_TOOLS, it is IRREVERSIBLE.
+#
+# REVERSIBLE — status unchanged → re-callable with the old value:
+#   - modify_pending_order_address  (pending → pending; call again, old address)
+#   - modify_pending_order_payment  (pending → pending; switch back)
+#   - modify_user_address           (no status check; reset to old address)
 RETAIL_REVERSIBLE: set[str] = {
-    "cancel_pending_order",
-    "modify_pending_order_items",
     "modify_pending_order_payment",
     "modify_pending_order_address",
     "modify_user_address",
-    "return_delivered_order_items",   # just initiates; reversible until processed
 }
 
-# Mutating tools whose effects cannot easily be undone.
+# IRREVERSIBLE — changes status away from its precondition and there is NO
+# inverse tool in ALL_TOOLS to restore it within the session:
+#   - cancel_pending_order            pending  → cancelled            (no un-cancel)
+#   - return_delivered_order_items    delivered → return requested    (no un-return)
+#   - modify_pending_order_items      pending  → pending (item modified)
+#       wiki.md: "will not be able to modify or cancel the order anymore"
+#   - exchange_delivered_order_items  delivered → exchange requested  (wiki: once-only)
+#   - transfer_to_human_agents        ends the session
 RETAIL_IRREVERSIBLE: set[str] = {
+    "cancel_pending_order",
+    "return_delivered_order_items",
+    "modify_pending_order_items",
     "exchange_delivered_order_items",
     "transfer_to_human_agents",
 }
@@ -90,15 +108,30 @@ def is_reversible(tool_name: str, env_name: str = "retail") -> bool:
 
 
 def get_policy_text(env_name: str = "retail") -> str:
+    """Return the domain policy fed verbatim to the critic.
+
+    Prefers the *actual* tau-bench policy doc (the same wiki the env enforces),
+    so the critic's policy-comparison matches ground truth. Falls back to the
+    embedded summary if tau-bench is not importable.
+    """
     if env_name == "retail":
-        return RETAIL_POLICY
+        try:
+            from tau_bench.envs.retail.wiki import WIKI
+            return WIKI
+        except Exception:
+            return RETAIL_POLICY
     if env_name == "airline":
-        return AIRLINE_POLICY
+        try:
+            from tau_bench.envs.airline.wiki import WIKI
+            return WIKI
+        except Exception:
+            return AIRLINE_POLICY
     raise ValueError(f"Unknown env: {env_name}")
 
 
-# ── Policy texts (fed verbatim to critic prompt) ─────────────────────────────
-# P2: Expand/correct these based on the actual tau-bench retail policy doc.
+# ── Policy texts (FALLBACK only) ─────────────────────────────────────────────
+# get_policy_text() now returns the real tau-bench wiki (WIKI) when available.
+# These embedded summaries are used only if tau-bench cannot be imported.
 
 RETAIL_POLICY = """\
 RETAIL BUSINESS RULES:

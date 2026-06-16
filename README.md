@@ -55,11 +55,11 @@ Main agent ──제안──▶ [mutating action인가?]
 
 **판정 규칙**
 - **Approve:** 목표와 맞고 제약·정책 위반 없고 도구·인자 모두 옳음.
-- **Revise:** 도구·의도는 옳고 인자만 틀려 국소 수정 가능.
-- **Block:** 잘못된 행동이고 되돌릴 수 있음 → 분기점 복원 + 피드백.
-- **Ask_user:** 정보가 모자라거나, 되돌릴 수 없는 중대 행동.
+- **Revise:** 도구·의도·대상은 옳고 인자 값만 틀려 국소 수정 가능.
+- **Block:** 정책·상태를 명백히 어긴 행동 → **가역성과 무관하게** 거부 + 피드백(가역이면 분기점 복원). 위반은 사용자에게 승인을 묻지 않는다.
+- **Ask_user:** 정보가 모자라거나, **유효하지만** 되돌릴 수 없는 중대 행동(사용자 확인 필요).
 
-가역성이 Block과 Ask_user를 가른다. 되돌릴 수 없는 행동을 가역으로 오판하면 치명적 잔존 오류가 남으므로 가역성 판단 정확도가 중요하다.
+가역성은 *명백한 위반*을 가르지 않는다(위반은 항상 block). 가역성은 *유효하지만 위험한* 행동에서 **진행 vs 확인(ask_user)**을 가르고, 잘못된 block을 가역 오판으로 강행하면 치명적 잔존 오류가 남으므로 가역성 판단 정확도가 여전히 중요하다.
 
 ---
 
@@ -105,7 +105,8 @@ retail(+가능하면 airline)에서 `vanilla`, `Reflexion`, `SABER`, `Ours`, `Or
 - 파이프라인(P1)은 데이터(P2)를 기다리지 않는다 — P1의 프롬프트 critic으로 루프를 먼저 돌린다.
 - 분기점 라벨러(P2)는 P3가 돌린 실제 로그에 적용한다(손발 맞춤).
 - 상세 실행 순서·산출물은 `ACTION_PLAN.md` 참조.
-- 구현 코드: `pipeline_code/`. 실행 방법: `implementation_detail_p1.md` 참조.
+- 구현 코드: `pipeline_code/`. 실행 방법: P1 = `implementation_detail_p1.md`, P2(데이터·라벨·평가) = `implementation_detail_p2.md`.
+- P2↔P1/P3 합의 필요 사항: `integration_issues_p2.md`.
 
 **모델 구성 (구현):** Main Agent = `gpt-5.4-nano`, Critic (Ours) = `gpt-5.4-mini`, API 키 1개(`OPENAI_API_KEY`)만 필요.
 

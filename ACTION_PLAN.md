@@ -75,10 +75,13 @@ smoke test (vanilla 3개):
  "question_to_user": null}
 ```
 **필수 필드:** `task_index`(int), `tool`(str), `gold_decision`(str), `reversible`(bool)  
-**선택 필드:** `args`, `revised_args`, `question_to_user`  
+**선택 필드:** `args`, `revised_args`, `question_to_user`, `basis`, `evidence`, `perturbation_type`  
 **`gold_decision` 값:** `"approve"` | `"block"` | `"revise"` | `"ask_user"`  
 **주의:** `task_id` 문자열이 아닌 **정수 `task_index`** 로 키를 설정해야 함
-(tau-bench task 순서 index와 동일)
+(tau-bench task 순서 index와 동일)  
+**갱신(P2):** 위 예시의 `reversible:true`는 옛 값 — cancel은 env 기준 **비가역**으로 재분류됨.
+각 라벨에 `basis`(근거 유형)·`evidence`(감사용 근거) 추가. 이 정답지의 올바른 소비는
+**오프라인 하니스 `src/eval/critic_accuracy.py`** (라이브 매칭 아님 — `integration_issues_p2.md` C1).
 
 #### ② 분기점 라벨 (Recovery Rate 측정용)
 파일 경로: `data/labels/divergences.jsonl`  
@@ -116,14 +119,41 @@ cd pipeline_code
 
 결과는 `data/results/{method}_seed42.jsonl` 에 저장됨.
 
-#### 지표 계산
+#### 지표 계산 — Task 지표 (라이브)
 ```bash
 python -m src.eval.metrics \
   --results-dir data/results \
-  --gold-labels ../data/labels/perturbations.jsonl \
   --divergence-file ../data/labels/divergences.jsonl \
   --output data/results/metrics.csv
 ```
+> ⚠️ Critic 정확도는 위 `metrics.py --gold-labels` 경로를 **쓰지 말 것**. 그 라이브
+> (task_index, tool) 매칭은 잘못된 행동을 비교한다(`integration_issues_p2.md` C1). 대신:
+
+#### Critic 정확도 — 오프라인 하니스 사용 (P2 제공)
+```bash
+python -m src.eval.critic_accuracy --perturbations ../data/labels/perturbations.jsonl \
+  --critic ours --model <critic_model> --cache data/results/critic_cache_ours.json \
+  --out data/results/critic_acc_ours.json
+python -m src.eval.critic_accuracy --perturbations ../data/labels/perturbations.jsonl \
+  --critic saber --model <main_model> --out data/results/critic_acc_saber.json
+# 조건 ablation:  --critic ours --ablate POLICY   (GOAL/STATE/CONSTRAINT/POLICY)
+```
+→ 4-way accuracy, block precision/recall, false-block-rate, reversibility accuracy,
+**revise_arg_accuracy**, **n_errors**, 조건별·basis별 분해. (`agent 실행 불필요`, critic LLM 호출만.)
+`--cache`로 재호출 방지, 실패 라벨은 에러로 기록(전체 안 죽음).
+> ⚠️ 하니스는 full goal + gold history를 줘서 **낙관적 상한**을 잰다 — 라이브 critic 정확도와
+> 동일시 말 것(`implementation_detail_p2.md` §5).
+
+#### Recovery Rate — 실험 로그로 분기 라벨 재생성 후 계산
+```bash
+python -m src.eval.label_divergence vs-gold \
+  --run data/results/vanilla_seed42.jsonl --env retail --split test \
+  --out ../data/labels/divergences.jsonl    # 그 다음 metrics.py 재실행
+```
+> ⚠️ 기본 divergences.jsonl은 bootstrap(임시)이라 recovery_rate에 그대로 쓰면 자기참조가
+> 된다(`integration_issues_p2.md` C3). 반드시 실험 로그 기반으로 교체할 것.
+
+상세·합의 항목: **`implementation_detail_p2.md` §6**, **`integration_issues_p2.md`**.
 
 #### Ablation 실험
 `configs/experiment.yaml`의 주석 처리된 `condition_ablation` 항목 언커멘트.  
@@ -157,7 +187,15 @@ python -m src.eval.metrics \
 
 > 누수 금지: 이 라벨은 평가·학습에만, 실행 중 프롬프트엔 넣지 않는다.
 
-**Done:** 분류표 확정, 변형 생성기·분기점 라벨러 동작, 라벨 로더.
+**Done ✅ (P2 구현 완료):**
+- `action_taxonomy.py`: 실제 16개 도구 검증, 가역성 재분류(env 기준; cancel/return/modify_items=비가역),
+  정책 텍스트=실제 wiki.md. (위 1.1 예시의 `reversible:true`는 옛 값 — 재분류됨.)
+- `perturb.py` → `perturbations.jsonl`(146개): 10개 연산자로 4대 조건(GOAL/STATE/CONSTRAINT/POLICY)
+  커버, basis/evidence 근거 부착, gold 실행 검증.
+- `label_divergence.py` → `divergences.jsonl`(bootstrap; P3 로그 후 vs-gold/pairwise로 재생성).
+- `critic_accuracy.py`(신규): 오프라인 critic-정확도 하니스 — perturbations의 올바른 소비 경로.
+
+**상세·P3 인계: `implementation_detail_p2.md`. 팀 합의 필요 사항: `integration_issues_p2.md`.**
 
 데이터 포맷·활용 방법은 이 파일 상단의 **팀 인터페이스 계약** 섹션을 참조.
 
