@@ -118,11 +118,11 @@ def compute_critic_metrics(
 
     Returns precision, recall, false_block_rate, 4_way_accuracy, reversibility_accuracy.
     """
-    # Build lookup: (task_index, tool) → gold entry
-    gold_map: dict[tuple[int, str], dict] = {}
+    # Build lookup: (task_index, tool) → list of gold entries (multiple perturbations per tool)
+    gold_map: dict[tuple[int, str], list[dict]] = {}
     for g in gold_labels:
         key = (g["task_index"], g["tool"])
-        gold_map[key] = g
+        gold_map.setdefault(key, []).append(g)
 
     tp = fp = fn = tn = 0
     correct_verdict = total_verdict = 0
@@ -133,10 +133,14 @@ def compute_critic_metrics(
         for log in r.get("step_logs", []):
             if not log.get("is_mutating"):
                 continue
-            key = (task_idx, log["tool"])
-            if key not in gold_map:
+            candidates = gold_map.get((task_idx, log["tool"]), [])
+            if not candidates:
                 continue
-            gold = gold_map[key]
+            # Match by args so we compare the same action, not just the same tool name
+            log_args = log.get("args") or {}
+            gold = next((c for c in candidates if c.get("args") == log_args), None)
+            if gold is None:
+                continue
             pred_verdict = log.get("decision") or "approve"
             gold_verdict = gold["gold_decision"]
 

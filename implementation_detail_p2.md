@@ -205,3 +205,28 @@ python -m src.eval.label_divergence vs-gold \
 중 27개)이 프롬프트와 일치한다. `README.md` §3 "판정 규칙"도 동일하게 갱신(가역성은 위반을
 가르지 않고, *유효하지만 위험한* 행동에서 진행 vs 확인을 가름). 라벨은 이미 "위반=block"이라
 변경 불필요.
+
+---
+
+## 9. P1이 추가로 수정한 사항 (C1·C2 버그 픽스)
+
+P2가 `integration_issues_p2.md`에 정리한 C1·C2를 P1이 직접 수정했다.
+
+### C2 — `critique_oracle()` args 무시 버그 수정 (`src/critic/critic.py`)
+
+**문제:** `_load_oracle_labels()`가 `(task_index, tool)`을 dict 키로 쓰면서 같은 키가 여러 번 나오면 뒤에 오는 entry로 앞 것을 **덮어썼다.** `perturbations.jsonl`에는 같은 `(task_index, tool)` 조합이 args만 달리하여 여러 행 존재하므로, 로드 후 마지막 entry 하나만 남고 나머지는 유실됐다. 결과적으로 oracle이 어떤 args로 호출되든 항상 마지막 entry의 verdict를 반환했다.
+
+**수정:**
+- `_load_oracle_labels()`의 value 타입을 `dict` → `list[dict]`로 변경, `setdefault(key, []).append(entry)`로 모든 entry를 보존.
+- `_find_label(candidates, tool_args)` 헬퍼 추가: args 정확 일치 entry를 찾아 반환, 없으면 `None`.
+- `critique_oracle()`: 후보 list에서 `_find_label`로 args 일치 entry를 찾고, 일치하는 것이 없으면 `approve`로 fallback(해당 행동이 perturbation에 없으면 정상 행동으로 간주).
+
+### C1 — `compute_critic_metrics()` args 무시 버그 수정 (`src/eval/metrics.py`)
+
+**문제:** `gold_map`을 `(task_index, tool) → 단일 entry` dict로 구성해, 같은 tool이 같은 task에 여러 번 등장하면 마지막 entry만 남았다. step_logs와 매칭할 때도 args를 보지 않으므로, 실제로 실행된 행동(특정 args)과 전혀 다른 args를 가진 perturbation 라벨을 비교하는 문제가 있었다.
+
+**수정:**
+- `gold_map` value 타입을 `list[dict]`로 변경, 모든 entry 보존.
+- step_logs 매칭 시 `log.get("args")`와 `candidate.get("args")`를 비교해 **args까지 일치하는 entry**만 사용. 일치하는 entry가 없으면 해당 step은 집계에서 제외.
+
+> **참고:** `compute_critic_metrics`의 근본적 한계(라이브 실행 로그 vs 오프라인 perturbation 라벨 비교)는 여전히 존재한다. Critic 정확도의 주 측정 경로는 `src/eval/critic_accuracy.py`(오프라인 하니스)이며, `compute_critic_metrics`는 라이브 로그에 perturbation과 **정확히 일치하는 행동**이 포함된 경우에만 유효한 보조 지표다.

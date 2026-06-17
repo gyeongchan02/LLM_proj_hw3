@@ -136,17 +136,17 @@ def critique_saber(
 # Oracle: reads gold label from P2's JSONL label file
 # ---------------------------------------------------------------------------
 
-def _load_oracle_labels(label_file: str) -> dict[tuple[int, str], dict]:
+def _load_oracle_labels(label_file: str) -> dict[tuple[int, str], list[dict]]:
     """
     Load P2's perturbation labels.
-    Keys: (task_index, tool_name) — returns the label entry.
+    Keys: (task_index, tool_name) → list of entries (multiple perturbations per tool).
 
     JSONL format (from P2 / ACTION_PLAN Phase 1.2):
     {"task_id": "retail_012", "task_index": 12, "step": 7,
      "tool": "modify_pending_order_items",
      "args": {...}, "gold_decision": "revise", "reversible": true}
     """
-    labels: dict[tuple[int, str], dict] = {}
+    labels: dict[tuple[int, str], list[dict]] = {}
     with open(label_file) as f:
         for line in f:
             line = line.strip()
@@ -154,11 +154,19 @@ def _load_oracle_labels(label_file: str) -> dict[tuple[int, str], dict]:
                 continue
             entry = json.loads(line)
             key = (entry["task_index"], entry["tool"])
-            labels[key] = entry
+            labels.setdefault(key, []).append(entry)
     return labels
 
 
-_oracle_cache: dict[str, dict] = {}
+def _find_label(candidates: list[dict], tool_args: dict) -> dict | None:
+    """Return the candidate whose args exactly match tool_args, or None."""
+    for c in candidates:
+        if c.get("args") == tool_args:
+            return c
+    return None
+
+
+_oracle_cache: dict[str, dict[tuple[int, str], list[dict]]] = {}
 
 
 def critique_oracle(
@@ -176,12 +184,16 @@ def critique_oracle(
         _oracle_cache[label_file] = _load_oracle_labels(label_file)
 
     labels = _oracle_cache[label_file]
-    key = (task_index, tool_name)
-    entry = labels.get(key)
+    candidates = labels.get((task_index, tool_name), [])
 
-    if entry is None:
+    if not candidates:
         # No label for this (task, tool) pair → approve by default
         return Decision(verdict="approve", reason="No oracle label; defaulting to approve", reversible=True)
+
+    entry = _find_label(candidates, tool_args)
+    if entry is None:
+        # Same (task, tool) exists in labels but args don't match any perturbation → approve
+        return Decision(verdict="approve", reason="Args match no perturbation entry; defaulting to approve", reversible=True)
 
     verdict = entry["gold_decision"]
     return Decision(
