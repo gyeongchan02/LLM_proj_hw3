@@ -31,6 +31,25 @@ from src.critic.schemas import AgentRunResult
 
 logger = logging.getLogger(__name__)
 
+# Load OPENAI_API_KEY etc. from pipeline_code/.env (when invoking python directly,
+# not via run_experiment.sh which exports it). Searches CWD and parents.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+# gpt-5.x reasoning models reject some params (e.g. temperature != 1); let
+# litellm silently drop unsupported params instead of erroring out.
+# Also quiet litellm's very verbose per-call INFO logging.
+try:
+    import litellm
+    litellm.drop_params = True
+    litellm.suppress_debug_info = True
+    logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+except ImportError:
+    pass
+
 
 # ---------------------------------------------------------------------------
 # Core runner
@@ -108,7 +127,7 @@ def _build_env(env_name: str, task_split: str, config: dict, seed: int):
             env_name=env_name,
             user_strategy=user_cfg.get("strategy", "react"),
             user_model=user_cfg.get("model", "gpt-4o"),
-            user_model_provider=user_cfg.get("provider", "openai"),
+            user_provider=user_cfg.get("provider", "openai"),
             task_split=task_split,
         )
     except ImportError:

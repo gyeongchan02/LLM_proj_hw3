@@ -16,7 +16,9 @@ model_provider: openai
 critic_model: gpt-5.4-mini   # mutating action 판정 (stronger, fewer calls)
 
 # ── Oracle label file (P2 provides) ─────────────────────────────────────────
-oracle_label_file: data/labels/perturbations.jsonl
+# Path is relative to pipeline_code/ (the CWD when runner is launched); the
+# labels live at repo-root/data/labels, i.e. ../data/labels from here.
+oracle_label_file: ../data/labels/perturbations.jsonl
 
 # ── User simulator (tau-bench) ───────────────────────────────────────────────
 user:
@@ -42,7 +44,7 @@ methods:
     max_reflections: 3
 
   - name: oracle
-    label_file: data/labels/perturbations.jsonl
+    label_file: ../data/labels/perturbations.jsonl
 
 # ── Ablation runs (uncomment to run) ─────────────────────────────────────────
 # Each entry here runs "ours" with one condition stripped out (P3 ablations):

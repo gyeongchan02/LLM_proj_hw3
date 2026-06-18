@@ -24,7 +24,7 @@ import logging
 from dataclasses import dataclass
 
 from src.agents.gated_env import GatedEnv
-from src.agents.vanilla import _extract_reward
+from src.agents.vanilla import build_base_agent, MAX_NUM_STEPS
 from src.critic.schemas import AgentRunResult
 
 logger = logging.getLogger(__name__)
@@ -58,34 +58,29 @@ class ReflexionAgent:
         self.model_provider = model_provider
         self.max_reflections = max_reflections
         self.env_name = env_name
-        self._base_agent = self._build_base_agent(**base_kwargs)
-
-    def _build_base_agent(self, **kwargs):
-        try:
-            from tau_bench.agents.tool_calling_agent import ToolCallingAgent
-            return ToolCallingAgent(
-                model=self.model,
-                model_provider=self.model_provider,
-                **kwargs,
-            )
-        except ImportError:
-            raise RuntimeError(
-                "tau-bench not installed. Run: pip install -e external/tau-bench"
-            )
 
     def run(self, task, env, task_index: int = -1) -> AgentRunResult:
         reflection: str | None = None
         result = None
+        total_cost = 0.0
 
         for attempt in range(self.max_reflections + 1):
-            # Apply reflection to task if available
-            augmented_task = self._augment_task(task, reflection)
+            # Inject the reflection into the agent's wiki (system prompt) so it
+            # reaches the AGENT, not the user simulator (which is seeded from the
+            # task instruction). This is the tau-bench-correct way to do Reflexion.
+            wiki = env.wiki
+            if reflection is not None:
+                wiki = (
+                    f"[REFLECTION FROM PREVIOUS ATTEMPT]\n{reflection}\n\n" + env.wiki
+                )
 
             gated = GatedEnv(env=env, critique_fn=None, env_name=self.env_name)
-            gated.reset(task_index)
-
-            raw = self._base_agent.run(task=augmented_task, env=gated)
-            reward = _extract_reward(raw)
+            base_agent = build_base_agent(env, self.model, self.model_provider, wiki=wiki)
+            solve_res = base_agent.solve(
+                env=gated, task_index=task_index, max_num_steps=MAX_NUM_STEPS
+            )
+            reward = float(solve_res.reward)
+            total_cost += getattr(solve_res, "total_cost", 0.0) or 0.0
             logs = gated.step_logs
 
             result = AgentRunResult(
@@ -97,33 +92,18 @@ class ReflexionAgent:
                     "model": self.model,
                     "attempt": attempt,
                     "reflection": reflection,
+                    "total_cost": total_cost,
                 },
             )
 
             if reward > 0 or attempt >= self.max_reflections:
                 break
 
-            # Generate reflection for next attempt
-            messages = _extract_messages(raw)
-            reflection = self._generate_reflection(messages)
+            # Generate reflection for next attempt from the conversation transcript
+            reflection = self._generate_reflection(solve_res.messages or [])
             logger.info(f"Reflexion attempt {attempt + 1} failed; reflecting...")
 
         return result
-
-    def _augment_task(self, task, reflection: str | None):
-        if reflection is None:
-            return task
-        prefix = f"[REFLECTION FROM PREVIOUS ATTEMPT]\n{reflection}\n\n"
-        if hasattr(task, "instruction"):
-            try:
-                augmented = object.__new__(type(task))
-                augmented.__dict__.update(task.__dict__)
-                augmented.instruction = prefix + task.instruction
-                return augmented
-            except Exception:
-                pass
-        # If task is a plain string
-        return prefix + str(task)
 
     def _generate_reflection(self, messages: list[dict]) -> str:
         try:

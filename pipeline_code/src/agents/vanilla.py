@@ -14,6 +14,32 @@ from src.critic.schemas import AgentRunResult
 
 logger = logging.getLogger(__name__)
 
+# Default cap on tool-calling steps per task (tau-bench's own default is 30).
+MAX_NUM_STEPS = 30
+
+
+def build_base_agent(env, model: str, provider: str, wiki: str | None = None):
+    """
+    Construct tau-bench's ToolCallingAgent from a (possibly gated) env.
+
+    Real tau-bench signature:
+        ToolCallingAgent(tools_info, wiki, model, provider, temperature=0.0)
+    so tools_info/wiki must come from the env at run-time (not __init__).
+    `wiki` can be overridden (used by Reflexion to inject a reflection).
+    """
+    try:
+        from tau_bench.agents.tool_calling_agent import ToolCallingAgent
+    except ImportError:
+        raise RuntimeError(
+            "tau-bench not installed. Run: pip install git+https://github.com/sierra-research/tau-bench.git"
+        )
+    return ToolCallingAgent(
+        tools_info=env.tools_info,
+        wiki=env.wiki if wiki is None else wiki,
+        model=model,
+        provider=provider,
+    )
+
 
 class VanillaAgent:
     """
@@ -31,31 +57,20 @@ class VanillaAgent:
         self.model = model
         self.model_provider = model_provider
         self.env_name = env_name
-        self._base_agent = self._build_base_agent(**kwargs)
-
-    def _build_base_agent(self, **kwargs):
-        try:
-            from tau_bench.agents.tool_calling_agent import ToolCallingAgent
-            return ToolCallingAgent(
-                model=self.model,
-                model_provider=self.model_provider,
-                **kwargs,
-            )
-        except ImportError:
-            raise RuntimeError(
-                "tau-bench not installed. Run: pip install -e external/tau-bench"
-            )
 
     def run(self, task, env, task_index: int = -1) -> AgentRunResult:
         gated = GatedEnv(env=env, critique_fn=None, env_name=self.env_name)
-        gated.reset(task_index)
-        raw = self._base_agent.run(task=task, env=gated)
-        reward = _extract_reward(raw)
+        base_agent = build_base_agent(env, self.model, self.model_provider)
+        result = base_agent.solve(env=gated, task_index=task_index, max_num_steps=MAX_NUM_STEPS)
         return AgentRunResult(
             task_index=task_index,
-            reward=reward,
+            reward=float(result.reward),
             step_logs=gated.step_logs,
-            metadata={"method": "vanilla", "model": self.model},
+            metadata={
+                "method": "vanilla",
+                "model": self.model,
+                "total_cost": getattr(result, "total_cost", None),
+            },
         )
 
 

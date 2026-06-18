@@ -12,8 +12,11 @@ __pycache__/
 .venv/
 *.egg-info/
 
-# Experiment outputs (large; commit metrics.csv separately if needed)
+# Experiment outputs (large; commit metrics.csv / critic_acc_*.json separately)
 data/results/*.jsonl
+data/results/*.log
+data/results/critic_cache_*.json
+*.bak
 
 # tau-bench submodule (added via git submodule)
 external/

@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 
 from src.agents.gated_env import GatedEnv
-from src.agents.vanilla import _extract_reward
+from src.agents.vanilla import build_base_agent, MAX_NUM_STEPS
 from src.critic.critic import critique_oracle
 from src.critic.schemas import AgentRunResult
 
@@ -43,20 +43,6 @@ class OracleGatingAgent:
         self.model_provider = model_provider
         self.label_file = label_file
         self.env_name = env_name
-        self._base_agent = self._build_base_agent(**base_kwargs)
-
-    def _build_base_agent(self, **kwargs):
-        try:
-            from tau_bench.agents.tool_calling_agent import ToolCallingAgent
-            return ToolCallingAgent(
-                model=self.model,
-                model_provider=self.model_provider,
-                **kwargs,
-            )
-        except ImportError:
-            raise RuntimeError(
-                "tau-bench not installed. Run: pip install -e external/tau-bench"
-            )
 
     def _make_critique_fn(self):
         label_file = self.label_file
@@ -82,20 +68,19 @@ class OracleGatingAgent:
             critique_fn=critique_fn,
             env_name=self.env_name,
         )
-        gated.reset(task_index)
-
-        raw = self._base_agent.run(task=task, env=gated)
-        reward = _extract_reward(raw)
+        base_agent = build_base_agent(env, self.model, self.model_provider)
+        result = base_agent.solve(env=gated, task_index=task_index, max_num_steps=MAX_NUM_STEPS)
 
         logs = gated.step_logs
         return AgentRunResult(
             task_index=task_index,
-            reward=reward,
+            reward=float(result.reward),
             step_logs=logs,
             metadata={
                 "method": "oracle",
                 "model": self.model,
                 "label_file": self.label_file,
+                "total_cost": getattr(result, "total_cost", None),
                 "num_blocked": sum(1 for l in logs if l.decision == "block"),
                 "num_revised": sum(1 for l in logs if l.decision == "revise"),
                 "num_ask_user": sum(1 for l in logs if l.decision == "ask_user"),

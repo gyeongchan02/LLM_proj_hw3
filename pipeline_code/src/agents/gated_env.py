@@ -59,21 +59,35 @@ class GatedEnv:
         self._step_logs: list[StepLog] = []
         self._retry_counts: dict[str, int] = {}
         self._step_num: int = 0
+        self._last_info = None   # last real EnvInfo (reused for synthetic responses)
 
     # ── Public interface ─────────────────────────────────────────────────────
 
-    def reset(self, task_index: int):
-        self._task_index = task_index
+    def reset(self, task_index: int | None = None):
+        # tau-bench's Agent.solve calls env.reset(task_index=...), so this is the
+        # authoritative reset. Returns an EnvResetResponse (observation/info).
+        if task_index is not None:
+            self._task_index = task_index
         self._step_logs = []
         self._retry_counts = {}
         self._step_num = 0
-        obs = self._env.reset(task_index)
-        self._goal = str(obs) if obs else ""
-        return obs
+        res = self._env.reset(task_index=task_index)
+        self._goal = str(getattr(res, "observation", "") or "")
+        self._last_info = getattr(res, "info", None)
+        return res
+
+    # Forward the attributes tau-bench's ToolCallingAgent reads off the env.
+    @property
+    def tools_info(self):
+        return self._env.tools_info
+
+    @property
+    def wiki(self):
+        return self._env.wiki
 
     @property
     def tools(self):
-        return self._env.tools
+        return getattr(self._env, "tools_info", None)
 
     @property
     def step_logs(self) -> list[StepLog]:
@@ -90,6 +104,7 @@ class GatedEnv:
         # ── Non-mutating: pass straight through ─────────────────────────────
         if not is_mutating(name, self._env_name) or self._critique is None:
             result = self._env.step(action)
+            self._last_info = getattr(result, "info", self._last_info)
             self._step_logs.append(StepLog(
                 step=self._step_num, tool=name, args=kwargs,
                 is_mutating=is_mutating(name, self._env_name),
@@ -117,6 +132,7 @@ class GatedEnv:
         # ── approve ──────────────────────────────────────────────────────────
         if verdict == "approve":
             result = self._env.step(action)
+            self._last_info = getattr(result, "info", self._last_info)
             self._step_logs.append(StepLog(
                 step=self._step_num, tool=name, args=kwargs,
                 is_mutating=True, reversible=reversible_hint,
@@ -146,6 +162,7 @@ class GatedEnv:
             revised = decision.revised_args or kwargs
             revised_action = self._make_action(name, revised, action)
             result = self._env.step(revised_action)
+            self._last_info = getattr(result, "info", self._last_info)
             self._step_logs.append(StepLog(
                 step=self._step_num, tool=name, args=revised,
                 is_mutating=True, reversible=reversible_hint,
@@ -214,21 +231,36 @@ class GatedEnv:
             return obj
         return {"name": name, "kwargs": kwargs}
 
-    def _blocked_result(self, tool_name: str, message: str) -> tuple:
-        """Return a synthetic env.step result for blocked/ask_user actions."""
+    def _blocked_result(self, tool_name: str, message: str):
+        """Return a synthetic EnvResponse for blocked/ask_user actions.
+
+        The action is NOT executed, so reward=0.0 and done=False. We reuse the
+        last real EnvInfo so that tau-bench's solve() can call info.model_dump().
+        """
+        from tau_bench.types import EnvResponse
         obs = (
             f"Tool '{tool_name}' was NOT executed.\n"
             f"{message}\n"
             "Please adjust your approach and try again."
         )
-        return obs, 0.0, False, {"gated": True, "gated_message": message}
+        return EnvResponse(
+            observation=obs, reward=0.0, done=False, info=self._last_info,
+        )
 
     def _append_feedback(self, result, feedback: str):
-        """Append critic feedback to the observation from env.step."""
-        if isinstance(result, tuple):
-            obs = str(result[0])
-            return (f"{obs}\n{feedback}",) + result[1:]
-        return f"{result}\n{feedback}"
+        """Append critic feedback to the observation of a real EnvResponse."""
+        obs = f"{getattr(result, 'observation', '')}\n{feedback}"
+        try:
+            return result.model_copy(update={"observation": obs})
+        except Exception:
+            # Fallback for unexpected response shapes
+            from tau_bench.types import EnvResponse
+            return EnvResponse(
+                observation=obs,
+                reward=getattr(result, "reward", 0.0),
+                done=getattr(result, "done", False),
+                info=getattr(result, "info", self._last_info),
+            )
 
     def _history_summary(self, n: int = 6) -> str:
         if not self._step_logs:
