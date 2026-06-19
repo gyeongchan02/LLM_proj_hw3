@@ -21,9 +21,12 @@ critic_model: gpt-5.4-mini   # mutating action 판정 (stronger, fewer calls)
 oracle_label_file: ../data/labels/perturbations.jsonl
 
 # ── User simulator (tau-bench) ───────────────────────────────────────────────
+# Stronger user-sim (closest practical stand-in for the paper's claude-sonnet-4).
+# Its API calls use OPENAI_USER_SIM_API_KEY (separate from the agent/critic key)
+# when that env var is set — see the user-sim patch in src/harness/runner.py.
 user:
   strategy: react          # tau-bench user strategy ("react" or "llm")
-  model: gpt-5.4-nano
+  model: gpt-5.4
   provider: openai
 
 # ── Output ──────────────────────────────────────────────────────────────────
@@ -38,7 +41,20 @@ methods:
     critic_model: gpt-5.4-mini
     enable_rollback: false
 
+  # SABER = faithful reproduction (Cuadron et al. 2025): mutation-gated USER
+  # verification (routes confirmation to the tau-bench user simulator) + targeted
+  # reflection. aux_model defaults to the main model (same-model pairing = paper default).
   - name: saber
+    # aux_model: gpt-5.4-nano
+
+  # SABER+Block = full SABER (mechanisms 1+2+3): adds block-based context cleaning
+  # (summarize older rounds + embedding retrieval of top-16) on top of SABER.
+  - name: saber_block
+    # aux_model: gpt-5.4-nano
+
+  # Old SABER = original simplified baseline (autonomous 4-way LLM critic, never
+  # reaches the user). Kept for reference / ablation only.
+  - name: saber_old
 
   - name: reflexion
     max_reflections: 3

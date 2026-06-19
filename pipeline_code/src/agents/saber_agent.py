@@ -73,7 +73,7 @@ class SABERGatingAgent:
             reward=float(result.reward),
             step_logs=logs,
             metadata={
-                "method": "saber",
+                "method": "saber_old",
                 "model": self.model,
                 "critic_model": self.model,
                 "total_cost": getattr(result, "total_cost", None),

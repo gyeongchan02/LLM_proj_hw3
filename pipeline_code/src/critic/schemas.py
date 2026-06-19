@@ -29,6 +29,7 @@ class StepLog:
     decision: Optional[str]   # verdict string, or None for non-mutating
     executed: bool            # whether env.step was actually called
     rolled_back: bool = False
+    observation: Optional[str] = None   # result / customer reply (for full-trajectory critic context)
 
     def to_dict(self) -> dict:
         return {

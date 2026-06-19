@@ -1,0 +1,4 @@
+n,pass@1,recovery_rate,mean_s,median_s,p95_s,total_mutating_steps,num_blocked,num_revised,num_ask_user,method
+30,0.4666666666666667,0.6666666666666666,32.671,31.43,58.28,65,33,2,17,ours
+30,0.6,0.75,43.38333333333333,40.78,75.29,59,0,0,0,saber
+30,0.6,0.5,37.99133333333334,36.01,63.08,45,0,0,0,vanilla

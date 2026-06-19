@@ -77,6 +77,8 @@ class CriticGatingAgent:
             critique_fn=critique_fn,
             env_name=self.env_name,
             enable_rollback=self.enable_rollback,
+            ask_user_to_sim=True,        # ours = upgraded SABER: ask_user → user simulator
+            aux_model=self.model,        # cheap model to parse the user's yes/no reply
         )
         base_agent = build_base_agent(env, self.model, self.model_provider)
         result = base_agent.solve(env=gated, task_index=task_index, max_num_steps=MAX_NUM_STEPS)

@@ -1,0 +1,7 @@
+config,n,n_errors,4way_accuracy,block_precision,block_recall,false_block_rate,reversibility_accuracy,revise_arg_accuracy
+ours,146,0,0.3082,0.3509,0.6667,0.319,0.8836,1.0
+saber,146,0,0.2945,0.0833,0.0667,0.1897,0.3904,0.0556
+ours_-GOAL,146,0,0.274,0.3333,0.6,0.3103,0.8562,
+ours_-STATE,146,0,0.274,0.3148,0.5667,0.319,0.8699,1.0
+ours_-CONSTRAINT,146,0,0.2808,0.3404,0.5333,0.2672,0.863,1.0
+ours_-POLICY,146,0,0.3014,0.2963,0.8,0.4914,0.6644,0.5

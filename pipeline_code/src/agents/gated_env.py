@@ -47,17 +47,25 @@ class GatedEnv:
         critique_fn: Optional[Callable[..., Decision]],
         env_name: str = "retail",
         enable_rollback: bool = False,
+        ask_user_to_sim: bool = False,
+        aux_model: Optional[str] = None,
     ):
         self._env = env
         self._critique = critique_fn
         self._env_name = env_name
         self._enable_rollback = enable_rollback
+        # When True, an `ask_user` verdict routes the critic's question to the LIVE
+        # user simulator (env.user.step) and acts on the reply — used by "ours" as
+        # the upgraded-SABER path. approve/revise/block stay autonomous.
+        self._ask_user_to_sim = ask_user_to_sim
+        self._aux_model = aux_model
 
         # Per-task state (reset on each env.reset())
         self._goal: str = ""
         self._task_index: int = -1
         self._step_logs: list[StepLog] = []
         self._retry_counts: dict[str, int] = {}
+        self._asked_keys: set[str] = set()   # actions already routed to the user
         self._step_num: int = 0
         self._last_info = None   # last real EnvInfo (reused for synthetic responses)
 
@@ -70,6 +78,7 @@ class GatedEnv:
             self._task_index = task_index
         self._step_logs = []
         self._retry_counts = {}
+        self._asked_keys = set()
         self._step_num = 0
         res = self._env.reset(task_index=task_index)
         self._goal = str(getattr(res, "observation", "") or "")
@@ -109,6 +118,7 @@ class GatedEnv:
                 step=self._step_num, tool=name, args=kwargs,
                 is_mutating=is_mutating(name, self._env_name),
                 reversible=None, decision=None, executed=True,
+                observation=str(getattr(result, "observation", ""))[:800],
             ))
             return result
 
@@ -137,6 +147,7 @@ class GatedEnv:
                 step=self._step_num, tool=name, args=kwargs,
                 is_mutating=True, reversible=reversible_hint,
                 decision="approve", executed=True,
+                observation=str(getattr(result, "observation", ""))[:800],
             ))
             return result
 
@@ -167,6 +178,7 @@ class GatedEnv:
                 step=self._step_num, tool=name, args=revised,
                 is_mutating=True, reversible=reversible_hint,
                 decision="revise", executed=True,
+                observation=str(getattr(result, "observation", ""))[:800],
             ))
             return self._append_feedback(
                 result,
@@ -175,6 +187,13 @@ class GatedEnv:
 
         # ── block ────────────────────────────────────────────────────────────
         if verdict == "block":
+            # Fix #1: ours never blocks autonomously — route the concern to the
+            # customer, who decides (confirm → execute, reject → revise).
+            if self._ask_user_to_sim:
+                q = (f"I was about to run '{name}' with {kwargs}, but I have a concern: "
+                     f"{decision.reason} Should I proceed?")
+                return self._route_to_user(action, name, kwargs, q, reversible_hint, "block")
+            # default (autonomous, e.g. oracle): synthetic block message to the agent
             self._step_logs.append(StepLog(
                 step=self._step_num, tool=name, args=kwargs,
                 is_mutating=True, reversible=reversible_hint,
@@ -188,12 +207,15 @@ class GatedEnv:
 
         # ── ask_user ─────────────────────────────────────────────────────────
         if verdict == "ask_user":
+            question = decision.question_to_user or "Can you clarify your request?"
+            if self._ask_user_to_sim:
+                return self._route_to_user(action, name, kwargs, question, reversible_hint, "ask_user")
+            # default (autonomous, e.g. oracle): synthetic message to the agent
             self._step_logs.append(StepLog(
                 step=self._step_num, tool=name, args=kwargs,
                 is_mutating=True, reversible=reversible_hint,
                 decision="ask_user", executed=False,
             ))
-            question = decision.question_to_user or "Can you clarify your request?"
             return self._blocked_result(
                 name,
                 f"[CRITIC-ASK] {question}",
@@ -262,6 +284,45 @@ class GatedEnv:
                 info=getattr(result, "info", self._last_info),
             )
 
+    def _route_to_user(self, action, name, kwargs, question, reversible_hint, label):
+        """Fix #1 (ours): route a critic concern (block OR ask_user) to the LIVE
+        user simulator — the customer arbitrates (confirm → execute, reject → revise).
+        The critic never decides block autonomously. `label` records the original
+        verdict ('block' or 'ask_user'); `executed` records the post-user outcome."""
+        from src.critic.critic import saber_user_confirmed
+        key = f"{name}:{_stable_key(kwargs)}"
+        # Anti-stall: an action already routed once executes directly on re-proposal.
+        if key in self._asked_keys:
+            result = self._env.step(action)
+            self._last_info = getattr(result, "info", self._last_info)
+            self._step_logs.append(StepLog(
+                step=self._step_num, tool=name, args=kwargs,
+                is_mutating=True, reversible=reversible_hint, decision=label, executed=True,
+            ))
+            return result
+        self._asked_keys.add(key)
+
+        raw = self._env.user.step(question) or ""
+        user_reply = raw.replace("###STOP###", "").strip()
+        if saber_user_confirmed(user_reply, self._aux_model):
+            result = self._env.step(action)
+            self._last_info = getattr(result, "info", self._last_info)
+            self._step_logs.append(StepLog(
+                step=self._step_num, tool=name, args=kwargs,
+                is_mutating=True, reversible=reversible_hint, decision=label, executed=True,
+            ))
+            return self._append_feedback(result, f"[CRITIC→USER confirmed] {user_reply}")
+        # customer did not confirm → do not execute; hand back for revision
+        self._step_logs.append(StepLog(
+            step=self._step_num, tool=name, args=kwargs,
+            is_mutating=True, reversible=reversible_hint, decision=label, executed=False,
+        ))
+        return self._blocked_result(
+            name,
+            f"[CRITIC→USER] The customer did NOT confirm: \"{user_reply}\". "
+            "Revise the action to match what they want.",
+        )
+
     def _history_summary(self, n: int = 6) -> str:
         if not self._step_logs:
             return "No previous tool calls."
@@ -269,6 +330,26 @@ class GatedEnv:
         for log in self._step_logs[-n:]:
             status = "OK" if log.executed else f"NOT_EXECUTED({log.decision})"
             lines.append(f"  step {log.step}: {log.tool}({log.args}) → {status}")
+        return "\n".join(lines)
+
+    def _full_transcript(self) -> str:
+        """FULL conversation so far for the critic: every prior action WITH its
+        observation (customer replies + tool/DB results). Unlike _history_summary
+        (action-only, last-6), this lets the critic actually verify the action."""
+        if not self._step_logs:
+            return "No prior conversation."
+        lines = []
+        for log in self._step_logs:
+            if log.tool == "respond":
+                content = (log.args or {}).get("content", "")
+                lines.append(f"Agent → customer: {str(content)[:800]}")
+                if log.observation:
+                    lines.append(f"  Customer replied: {log.observation}")
+            else:
+                note = "" if log.executed else f"  [NOT executed: {log.decision}]"
+                lines.append(f"Agent called {log.tool}({log.args}){note}")
+                if log.observation:
+                    lines.append(f"  → Result: {log.observation}")
         return "\n".join(lines)
 
 

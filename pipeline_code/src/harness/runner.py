@@ -50,6 +50,49 @@ try:
 except ImportError:
     pass
 
+# ── Resilient user simulator (applies to ALL methods) ────────────────────────
+# tau-bench's `react` user requires the user-model output to contain
+# "Thought:"/"User Response:" markers; a small model (gpt-5.4-nano) occasionally
+# emits a bare reply (e.g. "yes"), which makes parse_response() raise and crashes
+# the whole episode (~6% of task-runs). We patch the react user to RETRY a couple
+# of times (fresh samples usually self-correct) and, failing that, degrade to
+# using the raw content (i.e. plain llm-user behaviour) instead of crashing.
+try:
+    import litellm as _ll
+    from tau_bench.envs import user as _tb_user
+
+    def _resilient_react_generate(self, messages):
+        # Route ONLY the user simulator through a separate API key (if provided),
+        # so a stronger/independent user-sim doesn't draw on the agent/critic key.
+        _usk = os.environ.get("OPENAI_USER_SIM_API_KEY")
+        _key = {"api_key": _usk} if _usk else {}
+        last = None
+        for attempt in range(3):
+            extra = {} if attempt == 0 else {"temperature": 0.7}
+            res = _ll.completion(
+                model=self.model, custom_llm_provider=self.provider,
+                messages=messages, **_key, **extra,
+            )
+            msg = res.choices[0].message
+            last = (msg, res)
+            try:
+                parsed = self.parse_response(msg.content or "")
+            except ValueError:
+                continue   # malformed → resample
+            self.messages.append(msg.model_dump())
+            self.total_cost = res._hidden_params.get("response_cost") or 0.0
+            return parsed
+        # All attempts malformed → degrade gracefully (don't crash the episode).
+        msg, res = last
+        self.messages.append(msg.model_dump())
+        self.total_cost = res._hidden_params.get("response_cost") or 0.0
+        content = (msg.content or "").strip()
+        return "###STOP###" if "###STOP###" in content else (content or "###STOP###")
+
+    _tb_user.ReactUserSimulationEnv.generate_next_message = _resilient_react_generate
+except Exception:
+    pass
+
 
 # ---------------------------------------------------------------------------
 # Core runner
@@ -190,6 +233,11 @@ def _build_agent_kwargs(method_cfg: dict, global_cfg: dict) -> dict:
 
     elif name == "reflexion":
         base["max_reflections"] = method_cfg.get("max_reflections", 3)
+
+    elif name in ("saber", "saber_block"):
+        # SABER variants: auxiliary model defaults to the main model (same-model
+        # pairing, the paper's default). Override with `aux_model:` in the config.
+        base["aux_model"] = method_cfg.get("aux_model", main_model)
 
     return base
 

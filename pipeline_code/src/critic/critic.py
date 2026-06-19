@@ -19,8 +19,10 @@ import litellm
 from src.critic.prompts import (
     CRITIC_SYSTEM_FULL,
     SABER_SYSTEM_PROMPT,
+    SABER_AUX_SYSTEM,
     build_critic_user_prompt,
     build_saber_user_prompt,
+    build_saber_aux_prompt,
 )
 from src.critic.schemas import Decision
 
@@ -130,6 +132,106 @@ def critique_saber(
         return _parse_decision(raw)
     except Exception as e:
         return _fallback_decision(e)
+
+
+# ---------------------------------------------------------------------------
+# Faithful SABER (Cuadron et al. 2025): auxiliary produces a targeted-reflection
+# reminder + a natural-language confirmation question for the USER. It does NOT
+# decide approve/block — the user simulator confirms, the main model then acts.
+# ---------------------------------------------------------------------------
+
+def saber_verify(
+    tool_name: str,
+    tool_args: dict[str, Any],
+    goal: str,
+    history_summary: str,
+    policy_text: str,
+    aux_model: str,
+) -> tuple[bool, str, str]:
+    """
+    Paper-faithful SABER auxiliary: the MODEL decides mutating-ness (not a taxonomy),
+    and — if mutating — also produces the targeted reflection + customer confirmation.
+
+    Returns (mutating, reminder, confirmation_question).
+      mutating      : bool — the aux model's judgment (Mechanism 1 gate, paper §4.2).
+      reminder      : targeted reflection (one-line policy reminder) — Mechanism 2.
+      confirmation  : plain-language question posed to the user — Mechanism 1.
+    On any failure, conservatively returns mutating=True with a generic confirmation
+    (so the gate asks the user rather than silently executing an unchecked action).
+    """
+    user_prompt = build_saber_aux_prompt(
+        goal=goal, history_summary=history_summary,
+        policy_text=policy_text, tool_name=tool_name, tool_args=tool_args,
+    )
+    try:
+        response = litellm.completion(
+            model=aux_model,
+            messages=[
+                {"role": "system", "content": SABER_AUX_SYSTEM},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0,
+            max_tokens=300,
+        )
+        text = (response.choices[0].message.content or "").strip()
+        if text.startswith("```"):
+            parts = text.split("```")
+            text = parts[1] if len(parts) > 1 else parts[0]
+            if text.startswith("json"):
+                text = text[4:]
+        data = json.loads(text.strip())
+        mutating = bool(data.get("mutating", True))
+        reminder = str(data.get("reminder", "")).strip()
+        confirmation = str(data.get("confirmation", "")).strip()
+        if mutating and not confirmation:
+            confirmation = (f"I'm about to perform '{tool_name}' with {tool_args}. "
+                            "Is that what you'd like me to do?")
+        return mutating, reminder, confirmation
+    except Exception as e:
+        logger.warning(f"SABER aux parse error: {e}; conservatively treating as mutating")
+        return (
+            True,
+            "Reminder: confirm this state-changing action complies with the domain policy.",
+            f"I'm about to perform '{tool_name}' with {tool_args}. "
+            "Is that what you'd like me to do?",
+        )
+
+
+def saber_user_confirmed(user_reply: str, aux_model: str) -> bool:
+    """
+    Did the customer agree to proceed with the proposed mutating action?
+    Cheap heuristic first; falls back to a tiny aux classification when unclear.
+    Defaults to False (do NOT execute) on uncertainty — safer for a gate.
+    """
+    text = (user_reply or "").strip().lower()
+    if not text:
+        return False
+    neg = ("no", "don't", "do not", "stop", "wait", "cancel that", "not ",
+           "instead", "actually", "hold on", "that's not", "thats not", "wrong")
+    pos = ("yes", "yeah", "yep", "sure", "correct", "go ahead", "please do",
+           "proceed", "confirm", "that's right", "thats right", "ok", "okay", "sounds good")
+    has_neg = any(n in text for n in neg)
+    has_pos = any(p in text for p in pos)
+    if has_pos and not has_neg:
+        return True
+    if has_neg and not has_pos:
+        return False
+    # Ambiguous → ask the auxiliary model (yes/no).
+    try:
+        resp = litellm.completion(
+            model=aux_model,
+            messages=[
+                {"role": "system", "content":
+                 "A customer was asked to confirm a proposed action. Did they clearly "
+                 "agree to proceed AS-IS? Answer with ONLY 'yes' or 'no'."},
+                {"role": "user", "content": f"Customer reply: {user_reply}"},
+            ],
+            temperature=0,
+            max_tokens=3,
+        )
+        return (resp.choices[0].message.content or "").strip().lower().startswith("y")
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
