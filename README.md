@@ -97,7 +97,7 @@ retail(+가능하면 airline)에서 `vanilla`, `Reflexion`, `SABER`, `Ours`, `Or
 
 | 담당 | 영역 |
 |------|------|
-| **P1 (나)** | 파이프라인 + Critic + baseline(vanilla/Reflexion/SABER) + oracle critic |
+| **P1 (구현)** | 파이프라인 + Critic + baseline(vanilla/Reflexion/SABER) + oracle critic |
 | **P2 (데이터)** | 도구·가역성 분류표, 정답 액션 변형 생성기, 분기점 라벨러 |
 | **P3 (실험)** | metric 코드, 반복 실행 runner, 정량 평가·숫자 분석 |
 | **P4 (영상)** | 발표 영상 + (빌드 기간) 결과 시각화·error analysis 사례 정리 |
